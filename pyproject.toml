@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "interaction-network-paper"
+version = "0.1"
+description = "Charged Particle Tracking via Edge-Classifying Interacting Networks"
+readme = "README.md"
+packages = [{include = "interaction_network_paper", from="src"}]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+numpy = "^1.23.2"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

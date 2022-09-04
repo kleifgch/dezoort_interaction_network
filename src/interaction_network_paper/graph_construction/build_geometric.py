@@ -12,7 +12,7 @@ import argparse
 import logging
 import multiprocessing as mp
 from functools import partial
-sys.path.append("../")
+sys.path.append("../../../")
 
 # Externals
 import yaml

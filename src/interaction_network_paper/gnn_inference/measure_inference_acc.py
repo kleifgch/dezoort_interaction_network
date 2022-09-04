@@ -1,20 +1,14 @@
 import os
 import sys
-sys.path.append('../')
+sys.path.append('../../../')
 
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-from torch.autograd import Variable
-from sklearn.cluster import DBSCAN
-import matplotlib.pyplot as plt 
-import matplotlib.patches as mpatches
-from matplotlib import cm
-from torch_geometric.data import Data, DataLoader
+from torch_geometric.data import DataLoader
 
-from models.interaction_network import InteractionNetwork
-from models.dataset import GraphDataset
+from src.interaction_network_paper.models.interaction_network import InteractionNetwork
+from src.interaction_network_paper.models.dataset import GraphDataset
 
 construction = sys.argv[1]
 model_dir = '../trained_models/for_paper'

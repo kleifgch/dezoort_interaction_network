@@ -12,7 +12,7 @@ import argparse
 import logging
 import multiprocessing as mp
 from functools import partial
-sys.path.append("../")
+sys.path.append("../../../")
 
 # Externals
 import yaml
@@ -21,8 +21,6 @@ import numpy as np
 import pandas as pd
 import trackml.dataset
 import time
-from sklearn.cluster import DBSCAN
-from numba import jit
 
 # Locals
 from collections import namedtuple
@@ -41,35 +39,9 @@ def parse_args():
     add_arg('-v', '--verbose', action='store_true')
     add_arg('--show-config', action='store_true')
     add_arg('--interactive', action='store_true')
-    add_arg('--start-evtid', type=int, default=1000)
-    add_arg('--end-evtid', type=int, default=3000)
+    add_arg('--start-evtid', type=int, default=0)
+    add_arg('--end-evtid', type=int, default=10000)
     return parser.parse_args()
-
-# Build custom distance matrix
-@jit(nopython=True)
-def build_dist_matrix(X):
-    """ speedy custom distance matrix calculation
-    """
-    n_hits = X.shape[0]
-    dist_matrix = 100.*np.ones((n_hits, n_hits))
-    np.fill_diagonal(dist_matrix, 0.0)
-    for i in range(n_hits):
-        for j in range(i, n_hits):
-            if (X[i][2] == X[j][2]): continue
-            dEta = X[i][0] - X[j][0]
-            dPhi = min(abs(X[i][1] - X[j][1]),
-                       2*np.pi - abs(X[i][1]-X[j][1]))**2
-            dist = np.sqrt(dEta**2 + dPhi**2)
-            dist_matrix[i][j] = dist
-            dist_matrix[j][i] = dist
-    return dist_matrix
-
-# DBScan clustering
-def cluster_hits(dist_matrix, eps=0.05, k=3):
-    clustering = DBSCAN(eps=eps, min_samples=k,
-                        metric='precomputed').fit(dist_matrix)
-    return clustering.labels_
-
 
 def calc_dphi(phi1, phi2):
     """Computes phi2-phi1 given in range [-pi,pi]"""
@@ -84,7 +56,8 @@ def calc_eta(r, z):
 
 def select_segments(hits1, hits2, phi_slope_max, z0_max,
                     layer1, layer2, 
-                    remove_intersecting_edges=False):
+                    remove_intersecting_edges=False,
+                    module_map=[]):
     """
     Construct a list of selected segments from the pairings
     between hits1 and hits2, filtered with the specified
@@ -95,7 +68,7 @@ def select_segments(hits1, hits2, phi_slope_max, z0_max,
     """
     
     # Start with all possible pairs of hits
-    keys = ['evtid', 'r', 'phi', 'z', 'label']
+    keys = ['evtid', 'r', 'phi', 'z', 'module_id']
     hit_pairs = hits1[keys].reset_index().merge(
         hits2[keys].reset_index(), on='evtid', suffixes=('_1', '_2'))
 
@@ -109,10 +82,11 @@ def select_segments(hits1, hits2, phi_slope_max, z0_max,
     dR = np.sqrt(deta**2 + dphi**2)
     phi_slope = dphi / dr
     z0 = hit_pairs.z_1 - hit_pairs.r_1 * dz / dr
-    same_label = (hit_pairs.label_1 == hit_pairs.label_2)
-
+    #print("max(z0) = ", np.max(abs(z0)))
     # Apply the intersecting line cut
     intersected_layer = dr.abs() < -1 
+    mid1 = hit_pairs.module_id_1.values
+    mid2 = hit_pairs.module_id_2.values
     if remove_intersecting_edges:
         
         # Innermost barrel layer --> innermost L,R endcap layers
@@ -129,7 +103,7 @@ def select_segments(hits1, hits2, phi_slope_max, z0_max,
     good_seg_mask = ((phi_slope.abs() < phi_slope_max) & 
                      (z0.abs() < z0_max) & 
                      (intersected_layer == False) &
-                     same_label)
+                     (module_map[mid1,mid2]))
 
     dr = dr[good_seg_mask]
     dphi = dphi[good_seg_mask]
@@ -138,33 +112,24 @@ def select_segments(hits1, hits2, phi_slope_max, z0_max,
     return hit_pairs[['index_1', 'index_2']][good_seg_mask], dr, dphi, dz, dR
 
 def construct_graph(hits, layer_pairs, phi_slope_max, z0_max,
-                    feature_names, feature_scale, pt_min, 
-                    evtid="-1", remove_intersecting_edges = False):
-    """
-     * Construct one graph (e.g. from one event)
-    """
+                    feature_names, feature_scale, evtid="-1",
+                    remove_intersecting_edges = False,
+                    module_maps={}):
+    """Construct one graph (e.g. from one event)"""
+    
     t0 = time.time()
-    hits['eta'] = calc_eta(hits['r'], hits['z'])
-    X = hits[['eta', 'phi', 'layer']].to_numpy()
-    dist_matrix = build_dist_matrix(X)
-    eps = {0.5: 0.06, 0.6: 0.08, 0.7: 0.09, 0.8: 0.10, 0.9: 0.13, 
-           1.0: 0.14, 1.1: 0.14, 1.2: 0.15, 1.3: 0.16, 1.4: 0.17, 
-           1.5: 0.18, 1.6: 0.19, 1.7: 0.20, 1.8: 0.21, 1.9: 0.22,
-           2.0: 0.22}
-           
-    labels = cluster_hits(dist_matrix, eps=eps[pt_min], k=3)
-    hits['label'] = labels
     
     # Loop over layer pairs and construct segments
     layer_groups = hits.groupby('layer')
     segments = []
     seg_dr, seg_dphi, seg_dz, seg_dR = [], [], [], []
     for (layer1, layer2) in layer_pairs:
+        module_map = module_maps[(layer1, layer2)]
+        
         # Find and join all hit pairs
         try:
             hits1 = layer_groups.get_group(layer1)
             hits2 = layer_groups.get_group(layer2)
-
         # If an event has no hits on a layer, we get a KeyError.
         # In that case we just skip to the next layer pair
         except KeyError as e:
@@ -173,7 +138,8 @@ def construct_graph(hits, layer_pairs, phi_slope_max, z0_max,
         # Construct the segments
         selected, dr, dphi, dz, dR = select_segments(hits1, hits2, phi_slope_max, z0_max,
                                                      layer1, layer2, 
-                                                     remove_intersecting_edges=remove_intersecting_edges)
+                                                     remove_intersecting_edges=remove_intersecting_edges,
+                                                     module_map=module_map)
         
         segments.append(selected)
         seg_dr.append(dr)
@@ -244,7 +210,7 @@ def construct_graph(hits, layer_pairs, phi_slope_max, z0_max,
                               .format(temp[2], temp[3], temp[1]),
                               "      with      edge (l1={}, l2={}, z1={:.2f})"
                               .format(l1[l], l2[l], abs(z1[l]))
-                          )
+                        )
 
                         y[(pid1==pid2) & (pid1==pid) & 
                           (layer1==temp[2]) & (layer2==temp[3])] = 0
@@ -253,7 +219,6 @@ def construct_graph(hits, layer_pairs, phi_slope_max, z0_max,
                     temp[2] = l1[l]
                     temp[3] = l2[l]
 
-                #print("new temp=", temp)
                 pid_lookup[pid] = temp
     
     print(" ... completed in {0} seconds".format(time.time()-t0))
@@ -285,7 +250,7 @@ def select_hits(hits, truth, particles, pt_min=0, endcaps=False):
     r = np.sqrt(hits.x**2 + hits.y**2)
     phi = np.arctan2(hits.y, hits.x)
     # Select the data columns we need
-    hits = (hits[['hit_id', 'z', 'layer']]
+    hits = (hits[['hit_id', 'z', 'layer', 'module_id']]
             .assign(r=r, phi=phi)
             .merge(truth[['hit_id', 'particle_id', 'pt']], on='hit_id'))
     # Remove duplicate hits
@@ -315,7 +280,7 @@ def split_detector_sections(hits, phi_edges, eta_edges):
     
     return hits_sections
 
-def process_event(prefix, output_dir, pt_min, n_eta_sections, n_phi_sections,
+def process_event(prefix, output_dir, module_maps, pt_min, n_eta_sections, n_phi_sections,
                   eta_range, phi_range, phi_slope_max, z0_max, phi_reflect,
                   endcaps, remove_intersecting_edges):
     # Load the data
@@ -352,8 +317,8 @@ def process_event(prefix, output_dir, pt_min, n_eta_sections, n_phi_sections,
         EC_R = np.arange(11, 18)
         EC_R_pairs = np.stack([EC_R[:-1], EC_R[1:]], axis=1)
         layer_pairs = np.concatenate((layer_pairs, EC_R_pairs), axis=0)
-        barrel_EC_L_pairs = np.array([(0,4), (1,4), (2,4), (3,4)])
-        barrel_EC_R_pairs = np.array([(0,11), (1,11), (2,11), (3,11)])
+        barrel_EC_L_pairs = np.array([(0,4), (1,4), (2,4)])#, (3,4)])
+        barrel_EC_R_pairs = np.array([(0,11), (1,11), (2,11)])#, (3,11)])
         layer_pairs = np.concatenate((layer_pairs, barrel_EC_L_pairs), axis=0)
         layer_pairs = np.concatenate((layer_pairs, barrel_EC_R_pairs), axis=0)
 
@@ -363,8 +328,9 @@ def process_event(prefix, output_dir, pt_min, n_eta_sections, n_phi_sections,
                               phi_slope_max=phi_slope_max, z0_max=z0_max,
                               feature_names=feature_names,
                               feature_scale=feature_scale,
-                              evtid=evtid, pt_min=pt_min,
-                              remove_intersecting_edges=remove_intersecting_edges)
+                              evtid=evtid, 
+                              remove_intersecting_edges=remove_intersecting_edges,
+                              module_maps=module_maps)
               for section_hits in hits_sections]
     
     # Write these graphs to the output directory
@@ -380,7 +346,8 @@ def process_event(prefix, output_dir, pt_min, n_eta_sections, n_phi_sections,
         np.savez(filename, ** dict(x=graph.x, edge_attr=graph.edge_attr,
                                    edge_index=graph.edge_index, 
                                    y=graph.y, pid=graph.pid))
-       
+        
+
 def main():
     """Main function"""
 
@@ -401,9 +368,19 @@ def main():
     if args.task == 0:
         logging.info('Configuration: %s' % config)
 
-    # Construct layer pairs from adjacent layer numbers
-    #layers = np.arange(10)
-    #layer_pairs = np.stack([layers[:-1], layers[1:]], axis=1)
+    # Load module maps
+    pt_map = {0.5: '0p5', 0.6: '0p6', 0.7: '0p7', 0.8: '0p8', 0.9: '0p9',
+              1: '1', 1.1: '1p1', 1.2: '1p2', 1.3: '1p3', 1.4: '1p4', 1.5: '1p5', 
+              1.6: '1p6', 1.7: '1p7', 1.8: '1p8', 1.9: '1p9', 2.0: '2'}
+    pt_str = pt_map[config['selection']['pt_min']]
+    indir_sample_str = [f for f in config['input_dir'].split('/') if 'train' in f]
+    indir_sample_str = indir_sample_str[0].split('_')[1]
+    map_sample_str = '1' if indir_sample_str=='2' else '2'
+    print(" *** using module maps from", 
+          f"module_maps/module_map_{map_sample_str}_{pt_str}GeV.npy")
+    module_maps = np.load(f"module_maps/module_map_{map_sample_str}_{pt_str}GeV.npy", 
+                          allow_pickle=True).item()
+    module_maps = {key: item.astype(bool) for key, item in module_maps.items()}
 
     # Find the input files
     input_dir = config['input_dir']
@@ -429,8 +406,11 @@ def main():
     t0 = time.time()
     with mp.Pool(processes=args.n_workers) as pool:
         process_func = partial(process_event, output_dir=output_dir,
-                               phi_range=(-np.pi, np.pi), **config['selection'])
+                               phi_range=(-np.pi, np.pi), 
+                               module_maps=module_maps,
+                               **config['selection'])
         pool.map(process_func, file_prefixes)
+    
     t1 = time.time()
     print("Finished in", t1-t0, "seconds")
 

@@ -4,14 +4,13 @@ from time import time
 
 import numpy as np
 import torch
-import torch_geometric
 import torch.nn.functional as F
 from torch import optim
-from torch_geometric.data import Data, DataLoader
+from torch_geometric.data import DataLoader
 from torch.optim.lr_scheduler import StepLR
 
-from models.interaction_network import InteractionNetwork
-from models.dataset import GraphDataset
+from src.interaction_network_paper.models.interaction_network import InteractionNetwork
+from src.interaction_network_paper.models.dataset import GraphDataset
 
 def train(args, model, device, train_loader, optimizer, epoch):
     model.train()
@@ -143,7 +142,7 @@ def main():
         train_kwargs.update(cuda_kwargs)
         test_kwargs.update(cuda_kwargs)
         
-    home_dir = "../"
+    home_dir = "../../../"
     indir = "{}/hitgraphs_{}/{}_{}/".format(home_dir, args.sample, args.construction, args.pt)
     
     graph_files = np.array(os.listdir(indir))
