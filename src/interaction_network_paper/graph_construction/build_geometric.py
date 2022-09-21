@@ -276,31 +276,22 @@ def split_detector_sections(hits, phi_edges, eta_edges):
     
     return hits_sections
 
-def process_event(prefix, output_dir, pt_min, n_eta_sections, n_phi_sections,
-                  eta_range, phi_range, phi_slope_max, z0_max, phi_reflect,
-                  endcaps, remove_intersecting_edges):
-    # Load the data
-    evtid = int(prefix[-9:])
-    logging.info('Event %i, loading data' % evtid)
-    hits, particles, truth = trackml.dataset.load_event(
-        prefix, parts=['hits', 'particles', 'truth'])
 
+def build_graphs(evtid, hits, particles, truth, endcaps, pt_min, phi_range, n_phi_sections, eta_range, n_eta_sections,
+                 phi_reflect, phi_slope_max, remove_intersecting_edges, z0_max):
     # Apply hit selection
     logging.info('Event %i, selecting hits' % evtid)
-    hits = select_hits(hits, truth, particles, pt_min=pt_min, 
+    hits = select_hits(hits, truth, particles, pt_min=pt_min,
                        endcaps=endcaps).assign(evtid=evtid)
-
     # Divide detector into sections
-    #phi_range = (-np.pi, np.pi)
-    phi_edges = np.linspace(*phi_range, num=n_phi_sections+1)
-    eta_edges = np.linspace(*eta_range, num=n_eta_sections+1)
+    # phi_range = (-np.pi, np.pi)
+    phi_edges = np.linspace(*phi_range, num=n_phi_sections + 1)
+    eta_edges = np.linspace(*eta_range, num=n_eta_sections + 1)
     hits_sections = split_detector_sections(hits, phi_edges, eta_edges)
-
     # Graph features and scale
     feature_names = ['r', 'phi', 'z']
     feature_scale = np.array([1000., np.pi / n_phi_sections, 1000.])
     if (phi_reflect): feature_scale[1] *= -1
-
     # Define adjacent layers
     n_det_layers = 4
     l = np.arange(n_det_layers)
@@ -313,21 +304,34 @@ def process_event(prefix, output_dir, pt_min, n_eta_sections, n_phi_sections,
         EC_R = np.arange(11, 18)
         EC_R_pairs = np.stack([EC_R[:-1], EC_R[1:]], axis=1)
         layer_pairs = np.concatenate((layer_pairs, EC_R_pairs), axis=0)
-        barrel_EC_L_pairs = np.array([(0,4), (1,4), (2,4), (3,4)])
-        barrel_EC_R_pairs = np.array([(0,11), (1,11), (2,11), (3,11)])
+        barrel_EC_L_pairs = np.array([(0, 4), (1, 4), (2, 4), (3, 4)])
+        barrel_EC_R_pairs = np.array([(0, 11), (1, 11), (2, 11), (3, 11)])
         layer_pairs = np.concatenate((layer_pairs, barrel_EC_L_pairs), axis=0)
         layer_pairs = np.concatenate((layer_pairs, barrel_EC_R_pairs), axis=0)
-
     # Construct the graph
     logging.info('Event %i, constructing graphs' % evtid)
     graphs = [construct_graph(section_hits, layer_pairs=layer_pairs,
                               phi_slope_max=phi_slope_max, z0_max=z0_max,
                               feature_names=feature_names,
                               feature_scale=feature_scale,
-                              evtid=evtid, 
+                              evtid=evtid,
                               remove_intersecting_edges=remove_intersecting_edges)
               for section_hits in hits_sections]
-    
+    return graphs
+
+
+def process_event(prefix, output_dir, pt_min, n_eta_sections, n_phi_sections,
+                  eta_range, phi_range, phi_slope_max, z0_max, phi_reflect,
+                  endcaps, remove_intersecting_edges):
+    # Load the data
+    evtid = int(prefix[-9:])
+    logging.info('Event %i, loading data' % evtid)
+    hits, particles, truth = trackml.dataset.load_event(
+        prefix, parts=['hits', 'particles', 'truth'])
+
+    graphs = build_graphs(evtid, hits, particles, truth, endcaps, pt_min, phi_range, n_phi_sections, eta_range,
+                          n_eta_sections, phi_reflect, phi_slope_max, remove_intersecting_edges, z0_max)
+
     # Write these graphs to the output directory
     try:
         base_prefix = os.path.basename(prefix)
@@ -341,7 +345,7 @@ def process_event(prefix, output_dir, pt_min, n_eta_sections, n_phi_sections,
         np.savez(filename, ** dict(x=graph.x, edge_attr=graph.edge_attr,
                                    edge_index=graph.edge_index, 
                                    y=graph.y, pid=graph.pid, pt=graph.pt, eta=graph.eta))
-        
+
 
 def main():
     """Main function"""
