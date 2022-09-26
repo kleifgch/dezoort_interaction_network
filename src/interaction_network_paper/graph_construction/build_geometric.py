@@ -219,7 +219,8 @@ def construct_graph(hits, layer_pairs, phi_slope_max, z0_max,
 
 def select_hits(hits, truth, particles, pt_min=0, endcaps=False):
     # Barrel volume and layer ids
-    vlids = [(8,2), (8,4), (8,6), (8,8)]
+    vlids = [(8,2), (8,4), (8,6), (8,8), (13,2), (13,4), (13,6), (13,8),
+             (17,2), (17,4)]
     if (endcaps): vlids.extend([(7,14), (7,12), (7,10),
                                 (7,8), (7,6), (7,4), (7,2),
                                 (9,2), (9,4), (9,6), (9,8),
@@ -293,7 +294,7 @@ def build_graphs(evtid, hits, particles, truth, endcaps, pt_min, phi_range, n_ph
     feature_scale = np.array([1000., np.pi / n_phi_sections, 1000.])
     if (phi_reflect): feature_scale[1] *= -1
     # Define adjacent layers
-    n_det_layers = 4
+    n_det_layers = 10
     l = np.arange(n_det_layers)
     layer_pairs = np.stack([l[:-1], l[1:]], axis=1)
     if (endcaps):
